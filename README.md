@@ -45,6 +45,8 @@ Security-sensitive production values:
 - `REFRESH_COOKIE_DOMAIN`: shared parent domain when frontend and API use subdomains.
 - `CORS_ALLOWED_ORIGINS`: JSON list of exact frontend origins; wildcards are not supported with cookies.
 - `DATABASE_URL`: SQLAlchemy async URL using the `postgresql+asyncpg` driver.
+- `S3_ACCESS_KEY` and `S3_SECRET_KEY`: a read-only SeaweedFS identity scoped to the music bucket.
+- `S3_ENDPOINT_URL`: use the internal S3 endpoint (`http://swfs-s3:8333`) in production.
 
 The LiteLLM key is supplied when an administrator creates an invite. It is stored as plaintext by design, never returned by read endpoints, and sent only as the upstream Bearer token.
 

@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     litellm_model: str = "timur"
     generation_timeout_seconds: float = Field(default=300.0, gt=0)
     s3_download_timeout_seconds: float = Field(default=120.0, gt=0)
+    s3_endpoint_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8333")
+    s3_region_name: str = "us-east-1"
+    s3_bucket: str = "dreamlyn-music"
+    s3_access_key: SecretStr = SecretStr("change-me")
+    s3_secret_key: SecretStr = SecretStr("change-me")
     generation_min_duration_seconds: float = Field(default=5.0, gt=0)
     generation_max_duration_seconds: float = Field(default=30.0, gt=0)
     generation_max_prompt_length: int = Field(default=4000, ge=1)
@@ -53,6 +58,10 @@ class Settings(BaseSettings):
             raise RuntimeError("JWT_SECRET must contain at least 32 non-placeholder bytes.")
         if admin_password == "change-me":
             raise RuntimeError("ADMIN_DOCS_PASSWORD must not use the example value.")
+        if self.s3_access_key.get_secret_value() in {"", "change-me"}:
+            raise RuntimeError("S3_ACCESS_KEY must not use the example value.")
+        if self.s3_secret_key.get_secret_value() in {"", "change-me"}:
+            raise RuntimeError("S3_SECRET_KEY must not use the example value.")
 
 
 @lru_cache

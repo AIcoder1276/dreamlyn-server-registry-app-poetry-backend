@@ -1,15 +1,27 @@
+import io
 import json
 
 import httpx
+import pytest
 import respx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from dreamlyn_poetry_backend.api.routes import generations as generation_routes
+from dreamlyn_poetry_backend.core.config import Settings
+from dreamlyn_poetry_backend.services.storage import StorageStream
 from tests.helpers import register_user
+
+
+class FakeS3Client:
+    def close(self) -> None:
+        pass
 
 
 @respx.mock
 async def test_generation_history_streaming_and_soft_delete(
-    client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+    client: httpx.AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     auth, _ = await register_user(client, session_factory)
     headers = {"Authorization": f"Bearer {auth['access_token']}"}
@@ -45,22 +57,32 @@ async def test_generation_history_streaming_and_soft_delete(
     assert sent["model"] == "timur"
     assert sent["extra_body"]["output_mode"] == "device"
 
-    audio_route = respx.get("http://s3.test/music/example.mp3").mock(
-        return_value=httpx.Response(
-            206,
-            content=b"audio-bytes",
+    storage_request: dict[str, str | None] = {}
+
+    async def fake_open_storage_stream(
+        settings: Settings, storage_key: str, range_header: str | None
+    ) -> StorageStream:
+        storage_request.update(storage_key=storage_key, range_header=range_header)
+        return StorageStream(
+            status_code=206,
+            body=io.BytesIO(b"audio-bytes"),
+            client=FakeS3Client(),
             headers={
-                "Content-Type": "audio/mpeg",
-                "Content-Range": "bytes 0-10/11",
-                "Accept-Ranges": "bytes",
+                "content-type": "audio/mpeg",
+                "content-range": "bytes 0-10/11",
+                "accept-ranges": "bytes",
             },
         )
-    )
+
+    monkeypatch.setattr(generation_routes, "open_storage_stream", fake_open_storage_stream)
     audio = await client.get(generation["audio_url"], headers={**headers, "Range": "bytes=0-10"})
     assert audio.status_code == 206
     assert audio.content == b"audio-bytes"
     assert audio.headers["content-range"] == "bytes 0-10/11"
-    assert audio_route.calls.last.request.headers["range"] == "bytes=0-10"
+    assert storage_request == {
+        "storage_key": "music/example.mp3",
+        "range_header": "bytes=0-10",
+    }
 
     history = await client.get("/api/v1/generations", headers=headers)
     assert history.json()["total"] == 1

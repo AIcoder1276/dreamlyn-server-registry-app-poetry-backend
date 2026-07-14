@@ -1,8 +1,9 @@
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
-import httpx
+from botocore.exceptions import BotoCoreError, ClientError, ConnectTimeoutError, ReadTimeoutError
 from fastapi import APIRouter, Header, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
@@ -13,8 +14,10 @@ from dreamlyn_poetry_backend.api.schemas import GenerationCreateRequest, Generat
 from dreamlyn_poetry_backend.core.errors import AppError
 from dreamlyn_poetry_backend.db.models import Generation, GenerationStatus
 from dreamlyn_poetry_backend.services.generation import GenerationService
+from dreamlyn_poetry_backend.services.storage import open_storage_stream
 
 router = APIRouter(prefix="/generations", tags=["generations"])
+logger = logging.getLogger(__name__)
 
 
 def serialize_generation(generation: Generation) -> GenerationResponse:
@@ -106,34 +109,41 @@ async def download_audio(
     range_header: str | None = Header(default=None, alias="Range"),
 ) -> StreamingResponse:
     generation = await owned_generation(session, user, generation_id)
-    if generation.status != GenerationStatus.completed or not generation.storage_url:
+    if generation.status != GenerationStatus.completed or not generation.storage_key:
         raise AppError("audio_unavailable", "Audio is not available for this generation.", status_code=409)
 
-    client = httpx.AsyncClient(timeout=settings.s3_download_timeout_seconds, follow_redirects=True)
-    headers = {"Range": range_header} if range_header else {}
     try:
-        upstream = await client.send(
-            client.build_request("GET", generation.storage_url, headers=headers), stream=True
-        )
-    except httpx.TimeoutException as exc:
-        await client.aclose()
+        upstream = await open_storage_stream(settings, generation.storage_key, range_header)
+    except (ConnectTimeoutError, ReadTimeoutError) as exc:
         raise AppError("audio_timeout", "The audio storage request timed out.", status_code=504) from exc
-    except httpx.HTTPError as exc:
-        await client.aclose()
+    except ClientError as exc:
+        storage_status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        logger.warning(
+            "S3 audio read failed generation_id=%s storage_key=%s status=%s",
+            generation.id,
+            generation.storage_key,
+            storage_status,
+        )
+        code = 404 if storage_status == 404 else 502
+        raise AppError(
+            "audio_storage_error", "Audio could not be read from storage.", status_code=code
+        ) from exc
+    except BotoCoreError as exc:
         raise AppError("audio_storage_unavailable", "Audio storage is unavailable.", status_code=503) from exc
     if upstream.status_code not in {200, 206}:
-        await upstream.aclose()
-        await client.aclose()
+        await upstream.close()
         code = 404 if upstream.status_code == 404 else 502
         raise AppError("audio_storage_error", "Audio could not be read from storage.", status_code=code)
 
     async def body() -> AsyncIterator[bytes]:
-        async for chunk in upstream.aiter_bytes():
-            yield chunk
+        try:
+            async for chunk in upstream.iter_bytes():
+                yield chunk
+        finally:
+            await upstream.close()
 
     async def close_stream() -> None:
-        await upstream.aclose()
-        await client.aclose()
+        await upstream.close()
 
     response_headers = {
         name: value

@@ -25,6 +25,9 @@ def settings() -> Settings:
         admin_docs_password="admin-password",
         litellm_base_url="http://litellm.test",
         cors_allowed_origins=["http://frontend.test"],
+        s3_endpoint_url="http://s3.test",
+        s3_access_key="test-read-access-key",
+        s3_secret_key="test-read-secret-key",
     )
 
 
