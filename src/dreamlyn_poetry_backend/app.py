@@ -85,6 +85,7 @@ def build_admin_app(settings: Settings) -> FastAPI:
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+	    servers=[{"url": "/admin"}],
     )
     admin_app.state.settings = settings
     admin_app.include_router(admin.router, responses=COMMON_ERROR_RESPONSES)
